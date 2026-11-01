@@ -4,7 +4,8 @@
 
 ConnexionsActives est un petit outil Windows écrit en AutoHotkey v2. Il liste toutes les connexions réseau établies, identifie le programme derrière chacune, vérifie son origine (chemin et signature numérique), colore chaque ligne selon un verdict de légitimité clair, retrouve le nom des serveurs distants (DNS inverse) et vous envoie vers VirusTotal pour les programmes douteux. Pas d'installation, pas de service en arrière-plan, un seul fichier lisible de bout en bout.
 
-> Capture d'écran : <img width="1365" height="751" alt="image" src="https://github.com/user-attachments/assets/3c2e9292-2ec8-43d2-a339-c641c29d3de5" />
+> Capture d'écran : <img width="1364" height="700" alt="image" src="https://github.com/user-attachments/assets/b2b9ccc4-2a8e-464c-8300-da72e244d3bf" />
+
 
 
 ## Pourquoi cet outil est utile
