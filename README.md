@@ -29,6 +29,7 @@ Une ligne **orange** : `updater.exe`, non signé, installé dans `AppData\Local\
 
 **4. Le wrapper Java**
 `javaw.exe` est signé Oracle, donc légitime. Mais ce qui se connecte, c'est le `.jar` qu'il exécute. L'outil affiche `monapp.jar (via javaw.exe)` en **ambre**, et le bouton VirusTotal vérifie le `.jar`, pas `javaw.exe`. Si la commande contient une charge encodée ou une fenêtre cachée, la ligne passe en **rouge**.
+Liste d’hôtes surveillée : Java, Python, Node, PowerShell, mshta, rundll32, wscript, dotnet, etc.
 
 **5. L'outil d'accès à distance**
 AnyDesk ou TeamViewer sont légitimes, mais dangereux si vous n'avez pas lancé la session. Même quand vous l'avez lancé vous-même, chaque destination reste à confirmer : lancer le programme n'autorise pas toutes les adresses.
