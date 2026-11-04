@@ -4,7 +4,9 @@
 
 ConnexionsActives est un petit outil Windows écrit en AutoHotkey v2. Il liste toutes les connexions réseau établies, identifie le programme derrière chacune, vérifie son origine (chemin et signature numérique) et colore chaque ligne selon un verdict de légitimité clair. Pour les programmes « hôtes » comme Java, Python ou PowerShell, il montre ce qu'ils exécutent réellement (le `.jar`, le script, l'`.exe`). Il retrouve le nom des serveurs distants, vous envoie vers VirusTotal pour les cas douteux, et garde une liste de confiance fondée sur le programme et sa destination. Pas d'installation, pas de service en arrière-plan, un seul fichier lisible de bout en bout.
 
-> Capture d'écran : ajoutez ici une image de l'outil, par exemple `![Aperçu](docs/apercu.png)`
+> Capture d'écran : <img width="1365" height="553" alt="image" src="https://github.com/user-attachments/assets/925ccb61-da6d-46b0-a6c6-9b5bbefd2daf" /><img width="1363" height="468" alt="image" src="https://github.com/user-attachments/assets/f8b4c4c1-f756-43bd-a79b-14d66c3a65f8" />
+
+
 
 ## Pourquoi cet outil est utile
 
