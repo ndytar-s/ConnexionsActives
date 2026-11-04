@@ -54,6 +54,7 @@ Pour montrer à des étudiants ce qu'est un processus, un PID, un port distant, 
 - Bouton **VirusTotal (fichier)** : calcule le SHA-256 et ouvre la page du fichier
 - Bouton **VirusTotal (adresse IP)** : ouvre la réputation de l'adresse distante
 - Bouton **ZIP pour VirusTotal** : crée sur le Bureau un ZIP de l'application pour l'envoyer à l'analyse quand VirusTotal ne la connaît pas
+- Bouton **Arrêter (forcé)** : termine un processus et ses enfants (`taskkill /F /T`, puis PowerShell en secours), avec confirmation
 - **Animation d'analyse** : indicateur qui tourne, barre de progression, étape en cours et secondes écoulées
 - Double-clic : ouvre le dossier du fichier. Clic droit : toutes les actions, plus copier le chemin ou la commande
 - Colonnes triables, les couleurs suivent les lignes
@@ -184,6 +185,15 @@ tar (à la demande)  ->  ZIP de l'application
 - VirusTotal n'est contacté que par votre navigateur, quand vous cliquez sur le bouton ou envoyez le ZIP.
 - L'outil n'interrompt ni ne bloque aucune connexion : il informe, vous décidez.
 - Tout le code est dans un seul fichier, vous pouvez le relire avant de l'exécuter.
+
+## Arrêt forcé d'un processus
+
+Sélectionnez une ligne puis **Arrêter (forcé)** (ou clic droit). Une fenêtre résume le processus, son fichier, son verdict et sa commande, et demande confirmation (réponse par défaut : Non). Le processus et ses processus enfants sont terminés immédiatement, sans enregistrement des données non sauvegardées.
+
+- **Processus vitaux refusés** : `System`, `smss`, `csrss`, `wininit`, `winlogon`, `services`, `lsass` provoqueraient un écran bleu ou un redémarrage. L'outil refuse, ainsi que d'arrêter son propre processus.
+- **`svchost.exe`** : avertissement renforcé, car il héberge des services Windows. Préférez arrêter le service concerné.
+- **Processus protégés** (antivirus, EDR, composants système) : Windows les protège même contre les administrateurs. L'outil **ne contourne pas** ces protections ; il explique la situation et propose des pistes (arrêter le service, désactiver le démarrage, mode sans échec).
+- **Processus qui réapparaît** : un service, une tâche planifiée ou son parent le relance. Relancez l'analyse et regardez la colonne **Parent**.
 
 ## Limites à connaître
 

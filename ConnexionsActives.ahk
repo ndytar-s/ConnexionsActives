@@ -150,6 +150,7 @@ btnZip := g.Add("Button", "x+8 w170", "ZIP pour VirusTotal")
 btnOk := g.Add("Button", "x+8 w110", "Approuver")
 chk := g.Add("CheckBox", "x+15 yp+5 Checked", "Résolution DNS")
 chkRdap := g.Add("CheckBox", "x+10 yp", "Propriétaire (RDAP)")
+btnKill := g.Add("Button", "xm w150", "Arrêter (forcé)")
 prog := g.Add("Progress", "xm w1150 h12 Range0-100")
 status := g.Add("Text", "xm w1150"
     , "Prêt. Vert : officiel ou approuvé | Jaune : tiers signé | Ambre : hôte (Java, Python, PowerShell...) | Orange : non signé ou nouvelle destination | Violet : accès à distance | Rouge : suspect | Gris : inconnu")
@@ -164,6 +165,7 @@ btnIP.OnEvent("Click", (*) => VirusTotalIP(lv, lv.GetNext(0)))
 btnZip.OnEvent("Click", (*) => ZipApplication(lv, lv.GetNext(0)))
 btnOk.OnEvent("Click", (*) => ApprouverLigne(lv, lv.GetNext(0), false))
 chkRdap.OnEvent("Click", ConfirmerRdap)
+btnKill.OnEvent("Click", (*) => ArreterProcessus(lv, lv.GetNext(0)))
 
 ctxMenu := Menu()
 ctxMenu.Add("Vérifier sur Google", (*) => RechercherGoogle(lv, lv.GetNext(0)))
@@ -175,6 +177,8 @@ ctxMenu.Add("Approuver : programme + destination", (*) => ApprouverLigne(lv, lv.
 ctxMenu.Add("Approuver : programme (toutes destinations)", (*) => ApprouverLigne(lv, lv.GetNext(0), true))
 ctxMenu.Add("Ouvrir la liste de confiance", (*) => OuvrirListeConfiance())
 ctxMenu.Add()
+ctxMenu.Add("Arrêter le processus (forcé)", (*) => ArreterProcessus(lv, lv.GetNext(0)))
+ctxMenu.Add()
 ctxMenu.Add("Ouvrir l'emplacement du fichier", (*) => OuvrirDossier(lv, lv.GetNext(0)))
 ctxMenu.Add("Copier la ligne de commande", (*) => (d := DonneesLigne(lv, lv.GetNext(0))) ? A_Clipboard := d.cmd : 0)
 ctxMenu.Add("Copier le chemin", (*) => (r := lv.GetNext(0)) ? A_Clipboard := lv.GetText(r, COL_CHEMIN) : 0)
@@ -183,7 +187,7 @@ lv.OnEvent("DoubleClick", OuvrirDossier)
 lv.OnEvent("ItemSelect", AfficherCommande)
 lv.OnEvent("ContextMenu", (ctrl, item, isRC, x, y) => item ? ctxMenu.Show(x, y) : 0)
 lv.OnNotify(-12, CustomDraw)         ; NM_CUSTOMDRAW : couleur des lignes
-g.OnEvent("Size", (gui, mm, w, h) => mm != -1 ? lv.Move(, , w - 20, h - 115) : 0)
+g.OnEvent("Size", (gui, mm, w, h) => mm != -1 ? lv.Move(, , w - 20, h - 145) : 0)
 g.Show()
 return
 
@@ -846,6 +850,75 @@ ZipApplication(ctrl, row) {
         , "ZIP pour VirusTotal", "Iconi")
     Run('explorer.exe /select,"' zip '"')
     Run("https://www.virustotal.com/gui/home/upload")
+}
+
+; ---------------------------------------------------------------- Arrêt forcé
+
+; Arrête un processus et ses enfants (taskkill /F /T), puis PowerShell en secours.
+; Les processus protégés par Windows ou par un antivirus ne sont volontairement pas contournés.
+ArreterProcessus(ctrl, row) {
+    global rowColors
+    if !row {
+        MsgBox("Sélectionnez d'abord une ligne.")
+        return
+    }
+    pid := Integer(ctrl.GetText(row, 2))
+    d := DonneesLigne(ctrl, row)
+    nom := IsObject(d) ? d.nom : ctrl.GetText(row, 1)
+    nomL := StrLower(nom)
+
+    if (pid = ProcessExist()) {
+        MsgBox("Ce processus est ConnexionsActives lui-même.", "Arrêt refusé", "Icon!")
+        return
+    }
+    vitaux := Map("system", 1, "registry", 1, "smss.exe", 1, "csrss.exe", 1, "wininit.exe", 1
+        , "winlogon.exe", 1, "services.exe", 1, "lsass.exe", 1)
+    if (pid <= 4 || vitaux.Has(nomL)) {
+        MsgBox("« " nom " » est un processus vital de Windows : l'arrêter provoque un écran bleu ou un redémarrage immédiat. "
+            . "L'outil refuse.", "Arrêt refusé", "Icon!")
+        return
+    }
+
+    detail := "Processus : " nom " (PID " pid ")`nFichier : " ctrl.GetText(row, COL_CHEMIN) "`nVerdict : " ctrl.GetText(row, COL_VERDICT)
+    if (IsObject(d) && d.cmd != "")
+        detail .= "`nCommande : " SubStr(d.cmd, 1, 200)
+    if (nomL = "svchost.exe")
+        detail .= "`n`nsvchost héberge des services Windows : en arrêter un au hasard peut faire redémarrer le PC. "
+            . "Préférez arrêter le service concerné (services.msc)."
+    detail .= "`n`nLe processus et ses processus enfants seront terminés immédiatement, sans enregistrer les données non sauvegardées."
+    rep := MsgBox(detail "`n`nArrêter de force ?", "Arrêt forcé", "YesNo Icon! Default2")
+    if (rep != "Yes")
+        return
+
+    out := Trim(RunCmd("taskkill /PID " pid " /F /T"), " `r`n")
+    Sleep(600)
+    if ProcessExist(pid) {
+        out .= "`n" Trim(RunCmd('powershell -NoProfile -Command "Stop-Process -Id ' pid ' -Force"'), " `r`n")
+        Sleep(600)
+    }
+
+    if ProcessExist(pid) {
+        MsgBox("Windows refuse d'arrêter ce processus.`n`n"
+            . "Causes fréquentes :`n"
+            . "- processus protégé (antivirus, EDR, composant système) : Windows l'interdit même aux administrateurs, c'est voulu`n"
+            . "- le processus est déjà en cours d'arrêt`n`n"
+            . "Pistes : arrêter son service (services.msc ou sc stop), désactiver son démarrage (Gestionnaire des tâches, onglet Démarrage, "
+            . "ou Autoruns), ou démarrer en mode sans échec puis supprimer le programme.`n`n"
+            . "Réponse de Windows :`n" SubStr(out, 1, 400), "Arrêt impossible", "Icon!")
+        return
+    }
+
+    ; Marque les lignes de ce processus comme arrêtées
+    Loop ctrl.GetCount() {
+        if (ctrl.GetText(A_Index, 2) != pid)
+            continue
+        id := SendMessage(0x10B4, A_Index - 1, 0, ctrl)
+        ctrl.Modify(A_Index, "Col" COL_TRUST, "Arrêté")
+        rowColors[id] := [BGR(90, 90, 90), BGR(217, 217, 217)]
+    }
+    WinRedraw(ctrl.Hwnd)
+    MsgBox(nom " (PID " pid ") a été arrêté.`n`nS'il réapparaît, un service, une tâche planifiée ou son processus parent le relance : "
+        . "relancez l'analyse et regardez la colonne Parent.", "Arrêt forcé", "Iconi")
 }
 
 ; ---------------------------------------------------------------- Divers
