@@ -9,6 +9,7 @@ if !A_IsAdmin {
 
 COL_CHEMIN := 8                      ; numéro de la colonne "Chemin"
 COL_VERDICT := 11                    ; numéro de la colonne "Verdict"
+COL_FW := 14                         ; numéro de la colonne "Pare-feu"
 COL_TRUST := 13                      ; numéro de la colonne "Confiance"
 TAILLE_MAX_ZIP := 650 * 1024 * 1024  ; limite de taille de fichier de VirusTotal
 
@@ -83,6 +84,46 @@ foreach ($ip in Get-Content $f) {
 }
 )", dnsFile, "UTF-8")
 
+progBlocked := Map()                 ; programmes dont la communication est bloquée (règle active)
+ipBlocked := Map()                   ; adresses distantes bloquées (règle active)
+
+; Script PowerShell temporaire : règles du Pare-feu Windows créées par l'outil (bloquer / autoriser à nouveau)
+fwFile := A_Temp "\ahk_fw.ps1"
+try FileDelete(fwFile)
+FileAppend("
+(
+param($op, $arg)
+$ErrorActionPreference = 'Stop'
+$tab = [char]9
+$all = @(Get-NetFirewallRule -DisplayName 'ConnexionsActives~*' -ErrorAction SilentlyContinue)
+if ($op -eq 'list') {
+    foreach ($r in $all) { [string]$r.Enabled + $tab + $r.DisplayName + $tab + $r.Description }
+    exit
+}
+try {
+    $kind = 'PROG'
+    if ($op -like 'ip*') { $kind = 'IP' }
+    $st = 'True'
+    if ($op -like '*off') { $st = 'False' }
+    $h = [BitConverter]::ToString([Security.Cryptography.SHA1]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes($arg.ToLower()))).Replace('-', '').Substring(0, 16)
+    foreach ($d in @('Outbound', 'Inbound')) {
+        $n = 'ConnexionsActives~' + $kind + '~' + $d + '~' + $h
+        $r = $all | Where-Object { $_.DisplayName -eq $n } | Select-Object -First 1
+        if ($r) {
+            Set-NetFirewallRule -Name $r.Name -Enabled $st
+        } elseif ($st -eq 'True') {
+            if ($kind -eq 'PROG') { New-NetFirewallRule -DisplayName $n -Description $arg -Direction $d -Action Block -Program $arg -Profile Any -Enabled True | Out-Null }
+            else { New-NetFirewallRule -DisplayName $n -Description $arg -Direction $d -Action Block -RemoteAddress $arg -Profile Any -Enabled True | Out-Null }
+        }
+    }
+    'OK'
+    $off = @(Get-NetFirewallProfile | Where-Object { $_.Enabled -eq 'False' }).Count
+    if ($off -gt 0) { 'ATTENTION : le Pare-feu Windows est désactivé sur ' + $off + ' profil(s) : la règle n a aucun effet.' }
+} catch {
+    'ERREUR : ' + $_.Exception.Message
+}
+)", fwFile, "UTF-8")
+
 ownerCache := Map()                  ; propriétaires déjà trouvés pendant cette session
 
 ; Script PowerShell temporaire : propriétaire d'une adresse IP publique via RDAP (rdap.org -> registre régional)
@@ -151,11 +192,13 @@ btnOk := g.Add("Button", "x+8 w110", "Approuver")
 chk := g.Add("CheckBox", "x+15 yp+5 Checked", "Résolution DNS")
 chkRdap := g.Add("CheckBox", "x+10 yp", "Propriétaire (RDAP)")
 btnKill := g.Add("Button", "xm w150", "Arrêter (forcé)")
+btnBlocProg := g.Add("Button", "x+8 w220", "Programme : bloquer / autoriser")
+btnBlocIP := g.Add("Button", "x+8 w200", "Adresse : bloquer / débloquer")
 prog := g.Add("Progress", "xm w1150 h12 Range0-100")
 status := g.Add("Text", "xm w1150"
     , "Prêt. Vert : officiel ou approuvé | Jaune : tiers signé | Ambre : hôte (Java, Python, PowerShell...) | Orange : non signé ou nouvelle destination | Violet : accès à distance | Rouge : suspect | Gris : inconnu")
 lv := g.Add("ListView", "xm w1150 r24 Grid"
-    , ["Image", "PID", "Local", "Distant", "Hôte distant (DNS)", "Propriétaire (RDAP)", "Port distant", "Chemin", "Signature", "Éditeur", "Verdict", "Parent", "Confiance"])
+    , ["Image", "PID", "Local", "Distant", "Hôte distant (DNS)", "Propriétaire (RDAP)", "Port distant", "Chemin", "Signature", "Éditeur", "Verdict", "Parent", "Confiance", "Pare-feu"])
 
 lv.Opt("+LV0x010000")                ; LVS_EX_DOUBLEBUFFER : évite les défauts d'affichage
 btn.OnEvent("Click", Analyser)
@@ -166,6 +209,8 @@ btnZip.OnEvent("Click", (*) => ZipApplication(lv, lv.GetNext(0)))
 btnOk.OnEvent("Click", (*) => ApprouverLigne(lv, lv.GetNext(0), false))
 chkRdap.OnEvent("Click", ConfirmerRdap)
 btnKill.OnEvent("Click", (*) => ArreterProcessus(lv, lv.GetNext(0)))
+btnBlocProg.OnEvent("Click", (*) => BloquerProgramme(lv, lv.GetNext(0)))
+btnBlocIP.OnEvent("Click", (*) => BloquerAdresse(lv, lv.GetNext(0)))
 
 ctxMenu := Menu()
 ctxMenu.Add("Vérifier sur Google", (*) => RechercherGoogle(lv, lv.GetNext(0)))
@@ -178,6 +223,8 @@ ctxMenu.Add("Approuver : programme (toutes destinations)", (*) => ApprouverLigne
 ctxMenu.Add("Ouvrir la liste de confiance", (*) => OuvrirListeConfiance())
 ctxMenu.Add()
 ctxMenu.Add("Arrêter le processus (forcé)", (*) => ArreterProcessus(lv, lv.GetNext(0)))
+ctxMenu.Add("Programme : bloquer / autoriser la communication", (*) => BloquerProgramme(lv, lv.GetNext(0)))
+ctxMenu.Add("Adresse distante : bloquer / débloquer", (*) => BloquerAdresse(lv, lv.GetNext(0)))
 ctxMenu.Add()
 ctxMenu.Add("Ouvrir l'emplacement du fichier", (*) => OuvrirDossier(lv, lv.GetNext(0)))
 ctxMenu.Add("Copier la ligne de commande", (*) => (d := DonneesLigne(lv, lv.GetNext(0))) ? A_Clipboard := d.cmd : 0)
@@ -236,6 +283,8 @@ AnalyserCorps() {
     rowColors.Clear()
     rowData.Clear()
     LoadTrust()
+    Etape("Lecture des règles du Pare-feu...", 2)
+    ChargerPareFeu()
     Etape("Lecture des connexions (netstat)...", 3)
     out := RunCmd("netstat -noa")
     conns := []
@@ -285,16 +334,16 @@ AnalyserCorps() {
             verdict := "ACCÈS À DISTANCE (RDP entrant) : vérifier qui se connecte"
 
         d := {lieu: i.lieu, fp: i.fp, dest: DestKey(fqdn, ip), verdict: verdict, hote: i.hote, outil: i.outil
-            , nom: i.nom, gnom: i.gnom, cmd: i.cmd, owner: owners.Get(ip, "")}
+            , nom: i.nom, gnom: i.gnom, cmd: i.cmd, owner: owners.Get(ip, ""), exe: i.exe, ip: ip}
         t := StatutConfiance(d)
-        n := lv.Add(, i.img, cn.pid, cn.adr, cn.dist, fqdn, owners.Get(ip, ""), port, i.chemin, i.statut, i.editeur, verdict, i.parent, t)
+        n := lv.Add(, i.img, cn.pid, cn.adr, cn.dist, fqdn, owners.Get(ip, ""), port, i.chemin, i.statut, i.editeur, verdict, i.parent, t, TexteBlocage(d))
         id := SendMessage(0x10B4, n - 1, 0, lv)     ; LVM_MAPINDEXTOID
         rowData[id] := d
         c := CouleurLigne(verdict, t)
         if IsObject(c)
             rowColors[id] := c
     }
-    Loop 13
+    Loop 14
         lv.ModifyCol(A_Index, "AutoHdr")
     WinRedraw(lv.Hwnd)
     return conns.Length " connexions ESTABLISHED analysées en " Round((A_TickCount - t0) / 1000) " s. Sélectionnez une ligne pour voir sa commande. Vert : officiel/approuvé | Jaune : tiers | Ambre : hôte | Orange : non signé/nouvelle destination | Violet : accès à distance | Rouge : suspect | Gris : inconnu"
@@ -397,7 +446,7 @@ Inspecter(pid) {
     cheminAff := (cible != "") ? cible : chemin
     editeurAff := (cible != "" && editeur != "") ? editeur " (hôte " nom ")" : editeur
     return {nom: nom, img: img, gnom: gnom, chemin: cheminAff, statut: statut, editeur: editeurAff, verdict: verdict
-        , cmd: cmd, parent: parent, hote: hote, outil: outil, lieu: lieu, fp: fp}
+        , cmd: cmd, parent: parent, hote: hote, outil: outil, lieu: lieu, fp: fp, exe: chemin}
 }
 
 Ajout(&r, txt) {
@@ -850,6 +899,137 @@ ZipApplication(ctrl, row) {
         , "ZIP pour VirusTotal", "Iconi")
     Run('explorer.exe /select,"' zip '"')
     Run("https://www.virustotal.com/gui/home/upload")
+}
+
+; ---------------------------------------------------------------- Blocage réseau (Pare-feu Windows)
+
+; Lit les règles « ConnexionsActives~ » actives : programmes et adresses bloqués
+ChargerPareFeu() {
+    global fwFile, progBlocked, ipBlocked
+    progBlocked.Clear()
+    ipBlocked.Clear()
+    out := RunCmd('powershell -NoProfile -ExecutionPolicy Bypass -File "' fwFile '" list')
+    for l in StrSplit(out, "`n", "`r") {
+        p := StrSplit(l, "`t")                   ; actif | nom de la règle | description (chemin ou adresse)
+        if (p.Length < 3 || p[1] != "True")
+            continue
+        parts := StrSplit(p[2], "~")             ; ConnexionsActives ~ PROG ou IP ~ sens ~ empreinte
+        if (parts.Length < 4)
+            continue
+        if (parts[2] = "PROG")
+            progBlocked[StrLower(p[3])] := 1
+        else if (parts[2] = "IP")
+            ipBlocked[StrLower(p[3])] := 1
+    }
+}
+
+TexteBlocage(d) {
+    global progBlocked, ipBlocked
+    t := ""
+    if (d.exe != "" && progBlocked.Has(StrLower(d.exe)))
+        t := "Programme bloqué"
+    if (d.ip != "" && ipBlocked.Has(StrLower(d.ip)))
+        t .= (t = "" ? "" : " + ") "Adresse bloquée"
+    return t
+}
+
+RefreshPareFeu() {
+    global lv, rowData
+    ChargerPareFeu()
+    Loop lv.GetCount() {
+        id := SendMessage(0x10B4, A_Index - 1, 0, lv)
+        if rowData.Has(id)
+            lv.Modify(A_Index, "Col" COL_FW, TexteBlocage(rowData[id]))
+    }
+    WinRedraw(lv.Hwnd)
+}
+
+; op : prog, progoff, ip, ipoff. Crée ou bascule une règle entrante et une règle sortante.
+BasculerRegle(op, arg) {
+    global fwFile
+    return Trim(RunCmd('powershell -NoProfile -ExecutionPolicy Bypass -File "' fwFile '" ' op ' "' arg '"'), " `r`n")
+}
+
+ResultatRegle(out, retire) {
+    if (SubStr(out, 1, 2) != "OK") {
+        MsgBox("Le Pare-feu Windows a refusé la modification :`n`n" SubStr(out, 1, 500), "Pare-feu", "Icon!")
+        return
+    }
+    RefreshPareFeu()
+    if retire
+        txt := "La communication est de nouveau autorisée (la règle est désactivée, pas supprimée)."
+    else
+        txt := "Blocage activé. Les connexions déjà ouvertes sont en général coupées. Sinon, relancez le programme."
+    if (StrLen(out) > 2)
+        txt .= "`n`n" Trim(SubStr(out, 3), " `r`n")
+    MsgBox(txt, "Pare-feu", "Iconi")
+}
+
+; Bloque ou autorise toute communication réseau d'un programme (fichier exécutable)
+BloquerProgramme(ctrl, row) {
+    global progBlocked
+    if !row {
+        MsgBox("Sélectionnez d'abord une ligne.")
+        return
+    }
+    d := DonneesLigne(ctrl, row)
+    if (!IsObject(d) || d.exe = "") {
+        MsgBox("Chemin du programme inconnu : impossible de créer une règle.", "Pare-feu", "Icon!")
+        return
+    }
+    communs := Map("svchost.exe", 1, "system", 1, "lsass.exe", 1, "services.exe", 1, "wininit.exe", 1
+        , "winlogon.exe", 1, "csrss.exe", 1, "smss.exe", 1, "registry", 1)
+    if communs.Has(StrLower(d.nom)) {
+        MsgBox("« " d.nom " » est un composant système partagé : le bloquer couperait Internet, le DNS ou Windows Update pour tout le PC.`n`n"
+            . "Bloquez plutôt l'adresse distante, ou arrêtez le service concerné.", "Blocage refusé", "Icon!")
+        return
+    }
+    if progBlocked.Has(StrLower(d.exe)) {
+        rep := MsgBox("Autoriser à nouveau la communication de :`n" d.exe, "Pare-feu", "YesNo Iconi")
+        if (rep = "Yes")
+            ResultatRegle(BasculerRegle("progoff", d.exe), true)
+        return
+    }
+    detail := "Bloquer toute communication réseau (entrante et sortante) du programme :`n" d.exe
+    if d.hote
+        detail .= "`n`nATTENTION : " d.nom " est un hôte. Tous les programmes qui l'utilisent (autres .jar, scripts...) seront bloqués aussi."
+    detail .= "`n`nLa règle du Pare-feu Windows est réversible : cliquez de nouveau pour autoriser."
+    rep := MsgBox(detail "`n`nBloquer ?", "Pare-feu", "YesNo Icon! Default2")
+    if (rep = "Yes")
+        ResultatRegle(BasculerRegle("prog", d.exe), false)
+}
+
+; Bloque ou débloque toute communication avec une adresse distante, pour tous les programmes
+BloquerAdresse(ctrl, row) {
+    global ipBlocked
+    if !row {
+        MsgBox("Sélectionnez d'abord une ligne.")
+        return
+    }
+    d := DonneesLigne(ctrl, row)
+    ip := IsObject(d) ? d.ip : IpDe(ctrl.GetText(row, 4))
+    if (ip = "") {
+        MsgBox("Adresse distante introuvable.", "Pare-feu", "Icon!")
+        return
+    }
+    if (ip = "127.0.0.1" || ip = "::1" || EstPrive(ip)) {
+        MsgBox("L'adresse " ip " est locale : la bloquer pourrait couper votre réseau (passerelle, DNS, imprimantes). L'outil refuse.", "Blocage refusé", "Icon!")
+        return
+    }
+    if ipBlocked.Has(StrLower(ip)) {
+        rep := MsgBox("Débloquer l'adresse " ip " ?", "Pare-feu", "YesNo Iconi")
+        if (rep = "Yes")
+            ResultatRegle(BasculerRegle("ipoff", ip), true)
+        return
+    }
+    detail := "Bloquer toute communication (entrante et sortante) avec l'adresse :`n" ip
+    if (IsObject(d) && d.owner != "")
+        detail .= "`nPropriétaire : " d.owner
+    detail .= "`n`nCela concerne tous les programmes du PC. Si l'adresse appartient à un grand service (Microsoft, Google, Cloudflare), "
+        . "d'autres programmes légitimes peuvent en dépendre.`n`nLa règle est réversible : cliquez de nouveau pour débloquer."
+    rep := MsgBox(detail "`n`nBloquer ?", "Pare-feu", "YesNo Icon! Default2")
+    if (rep = "Yes")
+        ResultatRegle(BasculerRegle("ip", ip), false)
 }
 
 ; ---------------------------------------------------------------- Arrêt forcé

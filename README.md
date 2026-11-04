@@ -54,6 +54,7 @@ Pour montrer à des étudiants ce qu'est un processus, un PID, un port distant, 
 - Bouton **VirusTotal (fichier)** : calcule le SHA-256 et ouvre la page du fichier
 - Bouton **VirusTotal (adresse IP)** : ouvre la réputation de l'adresse distante
 - Bouton **ZIP pour VirusTotal** : crée sur le Bureau un ZIP de l'application pour l'envoyer à l'analyse quand VirusTotal ne la connaît pas
+- **Blocage réseau réversible** : bloquer ou autoriser la communication d'un programme, bloquer ou débloquer une adresse distante (règles du Pare-feu Windows, colonne « Pare-feu »)
 - Bouton **Arrêter (forcé)** : termine un processus et ses enfants (`taskkill /F /T`, puis PowerShell en secours), avec confirmation
 - **Animation d'analyse** : indicateur qui tourne, barre de progression, étape en cours et secondes écoulées
 - Double-clic : ouvre le dossier du fichier. Clic droit : toutes les actions, plus copier le chemin ou la commande
@@ -185,6 +186,17 @@ tar (à la demande)  ->  ZIP de l'application
 - VirusTotal n'est contacté que par votre navigateur, quand vous cliquez sur le bouton ou envoyez le ZIP.
 - L'outil n'interrompt ni ne bloque aucune connexion : il informe, vous décidez.
 - Tout le code est dans un seul fichier, vous pouvez le relire avant de l'exécuter.
+
+## Blocage réseau (Pare-feu Windows)
+
+Deux boutons, aussi dans le clic droit, créent des règles du Pare-feu Windows nommées `ConnexionsActives~...` (le chemin ou l'adresse est dans la description de la règle), **entrantes et sortantes**. Un second clic les désactive : la règle est conservée, rien n'est supprimé. La colonne **Pare-feu** indique « Programme bloqué » et/ou « Adresse bloquée ».
+
+- **Programme : bloquer / autoriser** : bloque toute communication du fichier exécutable. Pour un hôte (`javaw.exe`, `python.exe`...), cela bloque **tous** les programmes qui l'utilisent : l'outil le signale avant de continuer.
+- **Adresse : bloquer / débloquer** : bloque une adresse distante pour tous les programmes. Les adresses locales (réseau, passerelle, DNS) sont refusées.
+- **Composants système partagés refusés** (`svchost`, `lsass`, `services`...) : les bloquer couperait Internet ou Windows Update. Bloquez plutôt l'adresse.
+- Les règles apparaissent dans le Pare-feu Windows avec Sécurité avancée (`wf.msc`) et s'y suppriment si besoin.
+
+Limites : si le Pare-feu Windows est désactivé ou remplacé par celui d'un antivirus tiers, les règles n'ont aucun effet (l'outil le signale quand il le détecte). Les connexions déjà ouvertes sont en général coupées, sinon relancez le programme.
 
 ## Arrêt forcé d'un processus
 
