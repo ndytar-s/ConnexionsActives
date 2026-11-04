@@ -7,15 +7,9 @@ if !A_IsAdmin {
     ExitApp
 }
 
-<<<<<<< HEAD
-COL_CHEMIN := 7                      ; numéro de la colonne "Chemin"
-COL_VERDICT := 10                    ; numéro de la colonne "Verdict"
-COL_TRUST := 12                      ; numéro de la colonne "Confiance"
-=======
 COL_CHEMIN := 8                      ; numéro de la colonne "Chemin"
 COL_VERDICT := 11                    ; numéro de la colonne "Verdict"
 COL_TRUST := 13                      ; numéro de la colonne "Confiance"
->>>>>>> 61025ce (Ajout du propriétaire de l'adresse (RDAP), option désactivée par défaut)
 TAILLE_MAX_ZIP := 650 * 1024 * 1024  ; limite de taille de fichier de VirusTotal
 
 ; Script PowerShell temporaire : chemin, signature, ligne de commande, parent, empreinte, moteur embarqué
@@ -89,8 +83,6 @@ foreach ($ip in Get-Content $f) {
 }
 )", dnsFile, "UTF-8")
 
-<<<<<<< HEAD
-=======
 ownerCache := Map()                  ; propriétaires déjà trouvés pendant cette session
 
 ; Script PowerShell temporaire : propriétaire d'une adresse IP publique via RDAP (rdap.org -> registre régional)
@@ -123,7 +115,6 @@ foreach ($ip in Get-Content $f) {
 }
 )", rdapFile, "UTF-8")
 
->>>>>>> 61025ce (Ajout du propriétaire de l'adresse (RDAP), option désactivée par défaut)
 rowData := Map()                     ; données par identifiant de ligne (confiance, destination...)
 trust := Map()                       ; liste de confiance : "lieu<TAB>empreinte" -> destinations approuvées
 lieuKnown := Map()                   ; lieux déjà approuvés une fois (détecte les modifications)
@@ -158,19 +149,12 @@ btnIP := g.Add("Button", "x+8 w170", "VirusTotal (adresse IP)")
 btnZip := g.Add("Button", "x+8 w170", "ZIP pour VirusTotal")
 btnOk := g.Add("Button", "x+8 w110", "Approuver")
 chk := g.Add("CheckBox", "x+15 yp+5 Checked", "Résolution DNS")
-<<<<<<< HEAD
-=======
 chkRdap := g.Add("CheckBox", "x+10 yp", "Propriétaire (RDAP)")
->>>>>>> 61025ce (Ajout du propriétaire de l'adresse (RDAP), option désactivée par défaut)
 prog := g.Add("Progress", "xm w1150 h12 Range0-100")
 status := g.Add("Text", "xm w1150"
     , "Prêt. Vert : officiel ou approuvé | Jaune : tiers signé | Ambre : hôte (Java, Python, PowerShell...) | Orange : non signé ou nouvelle destination | Violet : accès à distance | Rouge : suspect | Gris : inconnu")
 lv := g.Add("ListView", "xm w1150 r24 Grid"
-<<<<<<< HEAD
-    , ["Image", "PID", "Local", "Distant", "Hôte distant (DNS)", "Port distant", "Chemin", "Signature", "Éditeur", "Verdict", "Parent", "Confiance"])
-=======
     , ["Image", "PID", "Local", "Distant", "Hôte distant (DNS)", "Propriétaire (RDAP)", "Port distant", "Chemin", "Signature", "Éditeur", "Verdict", "Parent", "Confiance"])
->>>>>>> 61025ce (Ajout du propriétaire de l'adresse (RDAP), option désactivée par défaut)
 
 lv.Opt("+LV0x010000")                ; LVS_EX_DOUBLEBUFFER : évite les défauts d'affichage
 btn.OnEvent("Click", Analyser)
@@ -179,10 +163,7 @@ btnVT.OnEvent("Click", (*) => VirusTotalHash(lv, lv.GetNext(0)))
 btnIP.OnEvent("Click", (*) => VirusTotalIP(lv, lv.GetNext(0)))
 btnZip.OnEvent("Click", (*) => ZipApplication(lv, lv.GetNext(0)))
 btnOk.OnEvent("Click", (*) => ApprouverLigne(lv, lv.GetNext(0), false))
-<<<<<<< HEAD
-=======
 chkRdap.OnEvent("Click", ConfirmerRdap)
->>>>>>> 61025ce (Ajout du propriétaire de l'adresse (RDAP), option désactivée par défaut)
 
 ctxMenu := Menu()
 ctxMenu.Add("Vérifier sur Google", (*) => RechercherGoogle(lv, lv.GetNext(0)))
@@ -246,11 +227,7 @@ Etape(msg, pct) {
 }
 
 AnalyserCorps() {
-<<<<<<< HEAD
-    global lv, chk, rowColors, rowData, t0
-=======
     global lv, chk, chkRdap, rowColors, rowData, t0
->>>>>>> 61025ce (Ajout du propriétaire de l'adresse (RDAP), option désactivée par défaut)
     lv.Delete()
     rowColors.Clear()
     rowData.Clear()
@@ -277,17 +254,6 @@ AnalyserCorps() {
         noms := ResoudreDNS(ips)
     }
 
-<<<<<<< HEAD
-    cache := Map()
-    total := pids.Count
-    idx := 0
-    for pid in pids {
-        idx++
-        Etape("Analyse du processus " idx "/" total " (PID " pid ")...", 30 + Round(65 * idx / total))
-        cache[pid] := Inspecter(pid)
-    }
-
-=======
     owners := Map()
     if chkRdap.Value {
         Etape("Propriétaire de " ips.Count " adresses (RDAP)...", 14)
@@ -303,7 +269,6 @@ AnalyserCorps() {
         cache[pid] := Inspecter(pid)
     }
 
->>>>>>> 61025ce (Ajout du propriétaire de l'adresse (RDAP), option désactivée par défaut)
     Etape("Construction du tableau...", 97)
     for cn in conns {
         i := cache[cn.pid]
@@ -316,26 +281,16 @@ AnalyserCorps() {
             verdict := "ACCÈS À DISTANCE (RDP entrant) : vérifier qui se connecte"
 
         d := {lieu: i.lieu, fp: i.fp, dest: DestKey(fqdn, ip), verdict: verdict, hote: i.hote, outil: i.outil
-<<<<<<< HEAD
-            , nom: i.nom, gnom: i.gnom, cmd: i.cmd}
-        t := StatutConfiance(d)
-        n := lv.Add(, i.img, cn.pid, cn.adr, cn.dist, fqdn, port, i.chemin, i.statut, i.editeur, verdict, i.parent, t)
-=======
             , nom: i.nom, gnom: i.gnom, cmd: i.cmd, owner: owners.Get(ip, "")}
         t := StatutConfiance(d)
         n := lv.Add(, i.img, cn.pid, cn.adr, cn.dist, fqdn, owners.Get(ip, ""), port, i.chemin, i.statut, i.editeur, verdict, i.parent, t)
->>>>>>> 61025ce (Ajout du propriétaire de l'adresse (RDAP), option désactivée par défaut)
         id := SendMessage(0x10B4, n - 1, 0, lv)     ; LVM_MAPINDEXTOID
         rowData[id] := d
         c := CouleurLigne(verdict, t)
         if IsObject(c)
             rowColors[id] := c
     }
-<<<<<<< HEAD
-    Loop 12
-=======
     Loop 13
->>>>>>> 61025ce (Ajout du propriétaire de l'adresse (RDAP), option désactivée par défaut)
         lv.ModifyCol(A_Index, "AutoHdr")
     WinRedraw(lv.Hwnd)
     return conns.Length " connexions ESTABLISHED analysées en " Round((A_TickCount - t0) / 1000) " s. Sélectionnez une ligne pour voir sa commande. Vert : officiel/approuvé | Jaune : tiers | Ambre : hôte | Orange : non signé/nouvelle destination | Violet : accès à distance | Rouge : suspect | Gris : inconnu"
@@ -588,11 +543,8 @@ ApprouverLigne(ctrl, row, toutes) {
     if d.hote
         detail .= "`nCommande : " SubStr(d.cmd, 1, 300) "`n(L'hôte seul n'est pas approuvé : uniquement cette commande exacte et ses fichiers.)"
     detail .= "`nDestination : " (toutes ? "toutes les destinations" : d.dest)
-<<<<<<< HEAD
-=======
     if (d.owner != "")
         detail .= "`nPropriétaire de l'adresse : " d.owner
->>>>>>> 61025ce (Ajout du propriétaire de l'adresse (RDAP), option désactivée par défaut)
     rep := MsgBox(detail "`n`nApprouver ?", "Liste de confiance", "YesNo Iconi")
     if (rep != "Yes")
         return
