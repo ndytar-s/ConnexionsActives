@@ -4,9 +4,7 @@
 
 ConnexionsActives est un petit outil Windows écrit en AutoHotkey v2. Il liste toutes les connexions réseau établies, identifie le programme derrière chacune, vérifie son origine (chemin et signature numérique) et colore chaque ligne selon un verdict de légitimité clair. Pour les programmes « hôtes » comme Java, Python ou PowerShell, il montre ce qu'ils exécutent réellement (le `.jar`, le script, l'`.exe`). Il retrouve le nom des serveurs distants, vous envoie vers VirusTotal pour les cas douteux, et garde une liste de confiance fondée sur le programme et sa destination. Pas d'installation, pas de service en arrière-plan, un seul fichier lisible de bout en bout.
 
-> Capture d'écran : <img width="1365" height="553" alt="image" src="https://github.com/user-attachments/assets/925ccb61-da6d-46b0-a6c6-9b5bbefd2daf" /><img width="1363" height="468" alt="image" src="https://github.com/user-attachments/assets/f8b4c4c1-f756-43bd-a79b-14d66c3a65f8" />
-
-
+> Capture d'écran : ajoutez ici une image de l'outil, par exemple `![Aperçu](docs/apercu.png)`
 
 ## Pourquoi cet outil est utile
 
@@ -29,8 +27,6 @@ Une ligne **orange** : `updater.exe`, non signé, installé dans `AppData\Local\
 
 **4. Le wrapper Java**
 `javaw.exe` est signé Oracle, donc légitime. Mais ce qui se connecte, c'est le `.jar` qu'il exécute. L'outil affiche `monapp.jar (via javaw.exe)` en **ambre**, et le bouton VirusTotal vérifie le `.jar`, pas `javaw.exe`. Si la commande contient une charge encodée ou une fenêtre cachée, la ligne passe en **rouge**.
-
-**Liste d’hôtes surveillée :** Java, Python, Node, PowerShell, mshta, rundll32, wscript, dotnet, etc.
 
 **5. L'outil d'accès à distance**
 AnyDesk ou TeamViewer sont légitimes, mais dangereux si vous n'avez pas lancé la session. Même quand vous l'avez lancé vous-même, chaque destination reste à confirmer : lancer le programme n'autorise pas toutes les adresses.
