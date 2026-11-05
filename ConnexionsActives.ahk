@@ -57,7 +57,12 @@ try {
     }
 } catch {}
 $eg = (($eng | Select-Object -Unique) -join ',')
-[string]::Join($sep, @($p, $st, $cn, $cmd, $par, $sz, $mt, $of, $eg))
+$ow = ''
+if ($w) {
+    $o = Invoke-CimMethod -InputObject $w -MethodName GetOwner -ErrorAction SilentlyContinue
+    if ($o -and $o.User) { $ow = $o.Domain + '\' + $o.User }
+}
+[string]::Join($sep, @($p, $st, $cn, $cmd, $par, $sz, $mt, $of, $eg, $ow))
 )", psFile, "UTF-8")
 
 rowColors := Map()                   ; couleurs par identifiant de ligne (stable au tri)
@@ -86,15 +91,33 @@ foreach ($ip in Get-Content $f) {
 
 progBlocked := Map()                 ; programmes dont la communication est bloquée (règle active)
 ipBlocked := Map()                   ; adresses distantes bloquées (règle active)
+lockBlocked := Map()                 ; programmes dont l'identité est verrouillée (règle active)
+lockImages := Map()                  ; nom d'image -> chemins verrouillés (fichier verrous.tsv)
+lockFile := A_AppData "\ConnexionsActives\verrous.tsv"
 
 ; Script PowerShell temporaire : règles du Pare-feu Windows créées par l'outil (bloquer / autoriser à nouveau)
 fwFile := A_Temp "\ahk_fw.ps1"
 try FileDelete(fwFile)
 FileAppend("
 (
-param($op, $arg)
-$ErrorActionPreference = 'Stop'
+param($op, $arg, $arg2)
 $tab = [char]9
+if ($op -eq 'owners') {
+    $ErrorActionPreference = 'SilentlyContinue'
+    $seen = @{}
+    foreach ($pr in @(Get-Process | Where-Object { $_.Path -eq $arg })) {
+        $w = Get-CimInstance Win32_Process -Filter ('ProcessId=' + $pr.Id)
+        if (-not $w) { continue }
+        $sid = (Invoke-CimMethod -InputObject $w -MethodName GetOwnerSid).Sid
+        $o = Invoke-CimMethod -InputObject $w -MethodName GetOwner
+        if ($sid -and -not $seen.ContainsKey($sid)) {
+            $seen[$sid] = 1
+            $sid + $tab + $o.Domain + '\' + $o.User
+        }
+    }
+    exit
+}
+$ErrorActionPreference = 'Stop'
 $all = @(Get-NetFirewallRule -DisplayName 'ConnexionsActives~*' -ErrorAction SilentlyContinue)
 if ($op -eq 'list') {
     foreach ($r in $all) { [string]$r.Enabled + $tab + $r.DisplayName + $tab + $r.Description }
@@ -103,17 +126,29 @@ if ($op -eq 'list') {
 try {
     $kind = 'PROG'
     if ($op -like 'ip*') { $kind = 'IP' }
+    if ($op -like 'lock*') { $kind = 'LOCK' }
     $st = 'True'
     if ($op -like '*off') { $st = 'False' }
     $h = [BitConverter]::ToString([Security.Cryptography.SHA1]::Create().ComputeHash([Text.Encoding]::UTF8.GetBytes($arg.ToLower()))).Replace('-', '').Substring(0, 16)
-    foreach ($d in @('Outbound', 'Inbound')) {
-        $n = 'ConnexionsActives~' + $kind + '~' + $d + '~' + $h
+    if ($kind -eq 'LOCK') {
+        $n = 'ConnexionsActives~LOCK~Outbound~' + $h
         $r = $all | Where-Object { $_.DisplayName -eq $n } | Select-Object -First 1
         if ($r) {
+            if ($st -eq 'True' -and $arg2) { Set-NetFirewallRule -Name $r.Name -LocalUser $arg2 }
             Set-NetFirewallRule -Name $r.Name -Enabled $st
         } elseif ($st -eq 'True') {
-            if ($kind -eq 'PROG') { New-NetFirewallRule -DisplayName $n -Description $arg -Direction $d -Action Block -Program $arg -Profile Any -Enabled True | Out-Null }
-            else { New-NetFirewallRule -DisplayName $n -Description $arg -Direction $d -Action Block -RemoteAddress $arg -Profile Any -Enabled True | Out-Null }
+            New-NetFirewallRule -DisplayName $n -Description $arg -Direction Outbound -Action Block -Program $arg -LocalUser $arg2 -Profile Any -Enabled True | Out-Null
+        }
+    } else {
+        foreach ($d in @('Outbound', 'Inbound')) {
+            $n = 'ConnexionsActives~' + $kind + '~' + $d + '~' + $h
+            $r = $all | Where-Object { $_.DisplayName -eq $n } | Select-Object -First 1
+            if ($r) {
+                Set-NetFirewallRule -Name $r.Name -Enabled $st
+            } elseif ($st -eq 'True') {
+                if ($kind -eq 'PROG') { New-NetFirewallRule -DisplayName $n -Description $arg -Direction $d -Action Block -Program $arg -Profile Any -Enabled True | Out-Null }
+                else { New-NetFirewallRule -DisplayName $n -Description $arg -Direction $d -Action Block -RemoteAddress $arg -Profile Any -Enabled True | Out-Null }
+            }
         }
     }
     'OK'
@@ -194,11 +229,12 @@ chkRdap := g.Add("CheckBox", "x+10 yp", "Propriétaire (RDAP)")
 btnKill := g.Add("Button", "xm w150", "Arrêter (forcé)")
 btnBlocProg := g.Add("Button", "x+8 w220", "Programme : bloquer / autoriser")
 btnBlocIP := g.Add("Button", "x+8 w200", "Adresse : bloquer / débloquer")
+btnLock := g.Add("Button", "x+8 w250", "Identité : verrouiller / déverrouiller")
 prog := g.Add("Progress", "xm w1150 h12 Range0-100")
 status := g.Add("Text", "xm w1150"
     , "Prêt. Vert : officiel ou approuvé | Jaune : tiers signé | Ambre : hôte (Java, Python, PowerShell...) | Orange : non signé ou nouvelle destination | Violet : accès à distance | Rouge : suspect | Gris : inconnu")
 lv := g.Add("ListView", "xm w1150 r24 Grid"
-    , ["Image", "PID", "Local", "Distant", "Hôte distant (DNS)", "Propriétaire (RDAP)", "Port distant", "Chemin", "Signature", "Éditeur", "Verdict", "Parent", "Confiance", "Pare-feu"])
+    , ["Image", "PID", "Local", "Distant", "Hôte distant (DNS)", "Propriétaire (RDAP)", "Port distant", "Chemin", "Signature", "Éditeur", "Verdict", "Parent", "Confiance", "Pare-feu", "Compte"])
 
 lv.Opt("+LV0x010000")                ; LVS_EX_DOUBLEBUFFER : évite les défauts d'affichage
 btn.OnEvent("Click", Analyser)
@@ -211,6 +247,7 @@ chkRdap.OnEvent("Click", ConfirmerRdap)
 btnKill.OnEvent("Click", (*) => ArreterProcessus(lv, lv.GetNext(0)))
 btnBlocProg.OnEvent("Click", (*) => BloquerProgramme(lv, lv.GetNext(0)))
 btnBlocIP.OnEvent("Click", (*) => BloquerAdresse(lv, lv.GetNext(0)))
+btnLock.OnEvent("Click", (*) => VerrouillerIdentite(lv, lv.GetNext(0)))
 
 ctxMenu := Menu()
 ctxMenu.Add("Vérifier sur Google", (*) => RechercherGoogle(lv, lv.GetNext(0)))
@@ -225,6 +262,7 @@ ctxMenu.Add()
 ctxMenu.Add("Arrêter le processus (forcé)", (*) => ArreterProcessus(lv, lv.GetNext(0)))
 ctxMenu.Add("Programme : bloquer / autoriser la communication", (*) => BloquerProgramme(lv, lv.GetNext(0)))
 ctxMenu.Add("Adresse distante : bloquer / débloquer", (*) => BloquerAdresse(lv, lv.GetNext(0)))
+ctxMenu.Add("Identité : verrouiller / déverrouiller (chemin + comptes)", (*) => VerrouillerIdentite(lv, lv.GetNext(0)))
 ctxMenu.Add()
 ctxMenu.Add("Ouvrir l'emplacement du fichier", (*) => OuvrirDossier(lv, lv.GetNext(0)))
 ctxMenu.Add("Copier la ligne de commande", (*) => (d := DonneesLigne(lv, lv.GetNext(0))) ? A_Clipboard := d.cmd : 0)
@@ -283,6 +321,7 @@ AnalyserCorps() {
     rowColors.Clear()
     rowData.Clear()
     LoadTrust()
+    LoadVerrous()
     Etape("Lecture des règles du Pare-feu...", 2)
     ChargerPareFeu()
     Etape("Lecture des connexions (netstat)...", 3)
@@ -332,18 +371,20 @@ AnalyserCorps() {
         verdict := i.verdict
         if (RegExMatch(cn.adr, ":3389$") && InStr(verdict, "SUSPECT") != 1 && InStr(verdict, "USURPATION") != 1)
             verdict := "ACCÈS À DISTANCE (RDP entrant) : vérifier qui se connecte"
+        if (LockUsurpe(i.nom, i.exe) && InStr(verdict, "SUSPECT") != 1 && InStr(verdict, "USURPATION") != 1)
+            verdict := "SUSPECT (porte le nom d'un programme verrouillé mais s'exécute depuis un autre chemin)"
 
         d := {lieu: i.lieu, fp: i.fp, dest: DestKey(fqdn, ip), verdict: verdict, hote: i.hote, outil: i.outil
             , nom: i.nom, gnom: i.gnom, cmd: i.cmd, owner: owners.Get(ip, ""), exe: i.exe, ip: ip}
         t := StatutConfiance(d)
-        n := lv.Add(, i.img, cn.pid, cn.adr, cn.dist, fqdn, owners.Get(ip, ""), port, i.chemin, i.statut, i.editeur, verdict, i.parent, t, TexteBlocage(d))
+        n := lv.Add(, i.img, cn.pid, cn.adr, cn.dist, fqdn, owners.Get(ip, ""), port, i.chemin, i.statut, i.editeur, verdict, i.parent, t, TexteBlocage(d), i.compte)
         id := SendMessage(0x10B4, n - 1, 0, lv)     ; LVM_MAPINDEXTOID
         rowData[id] := d
         c := CouleurLigne(verdict, t)
         if IsObject(c)
             rowColors[id] := c
     }
-    Loop 14
+    Loop 15
         lv.ModifyCol(A_Index, "AutoHdr")
     WinRedraw(lv.Hwnd)
     return conns.Length " connexions ESTABLISHED analysées en " Round((A_TickCount - t0) / 1000) " s. Sélectionnez une ligne pour voir sa commande. Vert : officiel/approuvé | Jaune : tiers | Ambre : hôte | Orange : non signé/nouvelle destination | Violet : accès à distance | Rouge : suspect | Gris : inconnu"
@@ -384,6 +425,7 @@ Inspecter(pid) {
     mtime := p.Length >= 7 ? p[7] : ""
     original := p.Length >= 8 ? p[8] : ""
     moteur := p.Length >= 9 ? p[9] : ""
+    compte := p.Length >= 10 ? p[10] : ""
 
     ; Verdict de base
     if (pid = "4" || nom = "System")
@@ -446,7 +488,7 @@ Inspecter(pid) {
     cheminAff := (cible != "") ? cible : chemin
     editeurAff := (cible != "" && editeur != "") ? editeur " (hôte " nom ")" : editeur
     return {nom: nom, img: img, gnom: gnom, chemin: cheminAff, statut: statut, editeur: editeurAff, verdict: verdict
-        , cmd: cmd, parent: parent, hote: hote, outil: outil, lieu: lieu, fp: fp, exe: chemin}
+        , cmd: cmd, parent: parent, hote: hote, outil: outil, lieu: lieu, fp: fp, exe: chemin, compte: compte}
 }
 
 Ajout(&r, txt) {
@@ -905,31 +947,42 @@ ZipApplication(ctrl, row) {
 
 ; Lit les règles « ConnexionsActives~ » actives : programmes et adresses bloqués
 ChargerPareFeu() {
-    global fwFile, progBlocked, ipBlocked
+    global fwFile, progBlocked, ipBlocked, lockBlocked
     progBlocked.Clear()
     ipBlocked.Clear()
+    lockBlocked.Clear()
     out := RunCmd('powershell -NoProfile -ExecutionPolicy Bypass -File "' fwFile '" list')
     for l in StrSplit(out, "`n", "`r") {
         p := StrSplit(l, "`t")                   ; actif | nom de la règle | description (chemin ou adresse)
         if (p.Length < 3 || p[1] != "True")
             continue
-        parts := StrSplit(p[2], "~")             ; ConnexionsActives ~ PROG ou IP ~ sens ~ empreinte
+        parts := StrSplit(p[2], "~")             ; ConnexionsActives ~ PROG, IP ou LOCK ~ sens ~ empreinte
         if (parts.Length < 4)
             continue
         if (parts[2] = "PROG")
             progBlocked[StrLower(p[3])] := 1
         else if (parts[2] = "IP")
             ipBlocked[StrLower(p[3])] := 1
+        else if (parts[2] = "LOCK")
+            lockBlocked[StrLower(p[3])] := 1
     }
 }
 
 TexteBlocage(d) {
-    global progBlocked, ipBlocked
+    global progBlocked, ipBlocked, lockBlocked
     t := ""
     if (d.exe != "" && progBlocked.Has(StrLower(d.exe)))
         t := "Programme bloqué"
-    if (d.ip != "" && ipBlocked.Has(StrLower(d.ip)))
-        t .= (t = "" ? "" : " + ") "Adresse bloquée"
+    if (d.exe != "" && lockBlocked.Has(StrLower(d.exe))) {
+        if (t != "")
+            t .= " + "
+        t .= "Identité verrouillée"
+    }
+    if (d.ip != "" && ipBlocked.Has(StrLower(d.ip))) {
+        if (t != "")
+            t .= " + "
+        t .= "Adresse bloquée"
+    }
     return t
 }
 
@@ -944,19 +997,24 @@ RefreshPareFeu() {
     WinRedraw(lv.Hwnd)
 }
 
-; op : prog, progoff, ip, ipoff. Crée ou bascule une règle entrante et une règle sortante.
-BasculerRegle(op, arg) {
+; op : prog, progoff, ip, ipoff, lock, lockoff, owners. Crée ou bascule les règles du Pare-feu.
+BasculerRegle(op, arg, arg2 := "") {
     global fwFile
-    return Trim(RunCmd('powershell -NoProfile -ExecutionPolicy Bypass -File "' fwFile '" ' op ' "' arg '"'), " `r`n")
+    cmd := 'powershell -NoProfile -ExecutionPolicy Bypass -File "' fwFile '" ' op ' "' arg '"'
+    if (arg2 != "")
+        cmd .= ' "' arg2 '"'
+    return Trim(RunCmd(cmd), " `r`n")
 }
 
-ResultatRegle(out, retire) {
+ResultatRegle(out, retire, txtOk := "") {
     if (SubStr(out, 1, 2) != "OK") {
         MsgBox("Le Pare-feu Windows a refusé la modification :`n`n" SubStr(out, 1, 500), "Pare-feu", "Icon!")
         return
     }
     RefreshPareFeu()
-    if retire
+    if (txtOk != "")
+        txt := txtOk
+    else if retire
         txt := "La communication est de nouveau autorisée (la règle est désactivée, pas supprimée)."
     else
         txt := "Blocage activé. Les connexions déjà ouvertes sont en général coupées. Sinon, relancez le programme."
@@ -1030,6 +1088,110 @@ BloquerAdresse(ctrl, row) {
     rep := MsgBox(detail "`n`nBloquer ?", "Pare-feu", "YesNo Icon! Default2")
     if (rep = "Yes")
         ResultatRegle(BasculerRegle("ip", ip), false)
+}
+
+; ---------------------------------------------------------------- Verrou d'identité
+
+; Comptes qui exécutent actuellement ce programme (toutes les instances visibles)
+Proprietaires(exe) {
+    out := BasculerRegle("owners", exe)
+    res := []
+    for l in StrSplit(out, "`n", "`r") {
+        p := StrSplit(l, "`t", , 2)
+        if (p.Length = 2 && RegExMatch(p[1], "^S-1-\d+(?:-\d+)+$"))
+            res.Push({sid: p[1], nom: Trim(p[2])})
+    }
+    return res
+}
+
+; Mémorise le verrou (image, chemin, comptes) : ON ou OFF, le dernier état fait foi
+EcrireVerrou(etat, d, comptes) {
+    global lockFile
+    liste := ""
+    for c in comptes
+        liste .= ((liste = "") ? "" : ", ") . c.nom
+    DirCreate(A_AppData "\ConnexionsActives")
+    FileAppend(etat "`t" FormatTime(, "yyyy-MM-dd HH:mm") "`t" d.nom "`t" d.exe "`t" liste "`n", lockFile, "UTF-8")
+    LoadVerrous()
+}
+
+LoadVerrous() {
+    global lockImages, lockFile
+    lockImages.Clear()
+    if !FileExist(lockFile)
+        return
+    etats := Map()
+    for l in StrSplit(FileRead(lockFile, "UTF-8"), "`n", "`r") {
+        p := StrSplit(l, "`t")
+        if (p.Length >= 4)
+            etats[StrLower(p[4])] := [p[1], StrLower(p[3])]
+    }
+    for chemin, v in etats {
+        if (v[1] != "ON")
+            continue
+        if !lockImages.Has(v[2])
+            lockImages[v[2]] := Map()
+        lockImages[v[2]][chemin] := 1
+    }
+}
+
+; Vrai si un processus porte le nom d'un programme verrouillé mais s'exécute depuis un autre chemin
+LockUsurpe(nom, exe) {
+    global lockImages
+    n := StrLower(nom)
+    return (exe != "" && lockImages.Has(n) && !lockImages[n].Has(StrLower(exe)))
+}
+
+; Le programme ne peut communiquer vers l'extérieur que depuis son chemin exact et sous les comptes observés
+VerrouillerIdentite(ctrl, row) {
+    global lockBlocked
+    if !row {
+        MsgBox("Sélectionnez d'abord une ligne.")
+        return
+    }
+    d := DonneesLigne(ctrl, row)
+    if (!IsObject(d) || d.exe = "") {
+        MsgBox("Chemin du programme inconnu : impossible de verrouiller son identité.", "Verrou d'identité", "Icon!")
+        return
+    }
+    if lockBlocked.Has(StrLower(d.exe)) {
+        rep := MsgBox("Déverrouiller l'identité de :`n" d.exe "`n`nLe programme pourra de nouveau communiquer sous n'importe quel compte "
+            . "(la règle est désactivée, pas supprimée).", "Verrou d'identité", "YesNo Iconi")
+        if (rep != "Yes")
+            return
+        out := BasculerRegle("lockoff", d.exe)
+        if (SubStr(out, 1, 2) = "OK")
+            EcrireVerrou("OFF", d, [])
+        ResultatRegle(out, true)
+        return
+    }
+
+    comptes := Proprietaires(d.exe)
+    if (comptes.Length = 0) {
+        MsgBox("Aucune instance de ce programme n'est visible en ce moment : ses comptes sont inconnus.`n`n"
+            . "Lancez le programme, relancez l'analyse, puis réessayez.", "Verrou d'identité", "Icon!")
+        return
+    }
+    liste := ""
+    sddl := "D:"
+    for c in comptes {
+        liste .= "`n   - " c.nom
+        sddl .= "(D;;CC;;;" c.sid ")"             ; refus = compte exclu du blocage
+    }
+    sddl .= "(A;;CC;;;WD)"                         ; tous les autres comptes sont bloqués
+
+    detail := "Verrouiller l'identité de :`nImage : " d.nom "`nChemin : " d.exe "`n`nComptes autorisés (observés en ce moment) :" liste
+    detail .= "`n`nCe programme ne pourra communiquer vers l'extérieur que sous ces comptes. Sous tout autre compte, sa communication sera bloquée."
+    detail .= "`n`nATTENTION : si ce programme tourne aussi sous un compte absent de la liste (une instance qui n'est pas lancée "
+        . "en ce moment), ce compte sera bloqué. Vérifiez la liste."
+    detail .= "`n`nLa règle est réversible : cliquez de nouveau pour déverrouiller."
+    rep := MsgBox(detail "`n`nVerrouiller ?", "Verrou d'identité", "YesNo Icon! Default2")
+    if (rep != "Yes")
+        return
+    out := BasculerRegle("lock", d.exe, sddl)
+    if (SubStr(out, 1, 2) = "OK")
+        EcrireVerrou("ON", d, comptes)
+    ResultatRegle(out, false, "Identité verrouillée : " d.nom " ne communique que depuis ce chemin et sous les comptes listés.")
 }
 
 ; ---------------------------------------------------------------- Arrêt forcé

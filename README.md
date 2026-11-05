@@ -59,6 +59,7 @@ Pour montrer à des étudiants ce qu'est un processus, un PID, un port distant, 
 - Bouton **VirusTotal (adresse IP)** : ouvre la réputation de l'adresse distante
 - Bouton **ZIP pour VirusTotal** : crée sur le Bureau un ZIP de l'application pour l'envoyer à l'analyse quand VirusTotal ne la connaît pas
 - **Blocage réseau réversible** : bloquer ou autoriser la communication d'un programme, bloquer ou débloquer une adresse distante (règles du Pare-feu Windows, colonne « Pare-feu »)
+- **Verrou d'identité** : un programme sensible ne peut communiquer que depuis son chemin exact et sous les comptes observés (colonne « Compte »)
 - Bouton **Arrêter (forcé)** : termine un processus et ses enfants (`taskkill /F /T`, puis PowerShell en secours), avec confirmation
 - **Animation d'analyse** : indicateur qui tourne, barre de progression, étape en cours et secondes écoulées
 - Double-clic : ouvre le dossier du fichier. Clic droit : toutes les actions, plus copier le chemin ou la commande
@@ -201,6 +202,18 @@ Deux boutons, aussi dans le clic droit, créent des règles du Pare-feu Windows 
 - Les règles apparaissent dans le Pare-feu Windows avec Sécurité avancée (`wf.msc`) et s'y suppriment si besoin.
 
 Limites : si le Pare-feu Windows est désactivé ou remplacé par celui d'un antivirus tiers, les règles n'ont aucun effet (l'outil le signale quand il le détecte). Les connexions déjà ouvertes sont en général coupées, sinon relancez le programme.
+
+## Verrou d'identité
+
+Pour les processus sensibles (`svchost.exe`, `lsass.exe`...), **Identité : verrouiller / déverrouiller** crée une règle du Pare-feu Windows qui bloque la communication sortante du programme, **sauf** sous les comptes qui l'exécutent réellement (colonne **Compte**). Le reste d'Internet n'est pas touché : seul le programme verrouillé est restreint.
+
+- À la création, l'outil lit les comptes de **toutes les instances visibles** (`SYSTEM`, `NETWORK SERVICE`, `LOCAL SERVICE`, votre compte...), vous les montre et demande confirmation. Il enregistre l'image, le chemin et les comptes dans `%APPDATA%\ConnexionsActives\verrous.tsv`.
+- **Cas concret :** un malware lance le vrai `C:\Windows\System32\svchost.exe` dans votre session et y injecte son code. Le chemin est correct, mais le compte est le vôtre au lieu de `SYSTEM` : sa communication est bloquée.
+- **Même nom, autre chemin :** le Pare-feu identifie un programme par son chemin complet et ne peut pas bloquer d'avance un `svchost.exe` placé dans `AppData`. L'outil le détecte à l'analyse : toute ligne qui porte le nom d'un programme verrouillé depuis un autre chemin devient **rouge**.
+- **Piège :** un compte absent de la liste (une instance non lancée au moment du verrouillage) sera bloqué. Vérifiez la liste affichée avant de confirmer.
+- Verrouiller n'est pas « approuver » : approuver signifie « je fais confiance » (ligne verte), verrouiller signifie « je protège ce programme ».
+
+Limites : un attaquant administrateur peut désactiver la règle. Cette forme de règle (blocage avec exception de comptes) doit être validée sur votre machine avant d'être appliquée à un programme vital : testez d'abord avec un programme sans risque, et vérifiez qu'Internet et Windows Update fonctionnent toujours.
 
 ## Arrêt forcé d'un processus
 
