@@ -1,0 +1,12 @@
+--------Créer un processus----------
+ New-Item -ItemType Directory "$env:USERPROFILE\Downloads\test" -Force | Out-Null
+>> Copy-Item "$env:WINDIR\System32\curl.exe" "$env:USERPROFILE\Downloads\test\curl.exe"
+>> Set-Content -Path "$env:USERPROFILE\Downloads\test\curl.exe" -Stream Zone.Identifier -Value "[ZoneTransfer]`r`nZoneId=3`r`nHostUrl=https://exemple.test/curl.exe"
+>> & "$env:USERPROFILE\Downloads\test\curl.exe" --limit-rate 1k -o NUL "https://speed.cloudflare.com/__down?bytes=200000"
+
+----------Relancer le processus------------
+& "$env:USERPROFILE\Downloads\test\curl.exe" --limit-rate 1k -o NUL "https://speed.cloudflare.com/__down?bytes=200000"
+
+--------Netoyer le processus----------
+Get-NetFirewallRule -DisplayName 'ConnexionsActives~*' | Remove-NetFirewallRule
+>> Remove-Item "$env:USERPROFILE\Downloads\test" -Recurse -Force

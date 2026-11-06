@@ -43,7 +43,8 @@ Pour montrer à des étudiants ce qu'est un processus, un PID, un port distant, 
 
 - Liste des connexions TCP **ESTABLISHED** (détecte aussi l'état « ÉTABLI » des Windows en français)
 - **Image = programme réellement exécuté** : pour un hôte, `monapp.jar (via javaw.exe)` ; la commande complète s'affiche en sélectionnant la ligne
-- Colonne **Parent** : qui a lancé le processus (Word qui lance PowerShell, par exemple)
+- Colonne **Chaîne de lancement** : tous les ancêtres du processus (`explorer.exe > facture.exe`), avec « (parent terminé) » quand un maillon a déjà disparu
+- Colonne **Origine** : marque de téléchargement du fichier (zone, adresse d'origine) lue dans le flux `Zone.Identifier`
 - Chemin complet, **signature numérique** et éditeur
 - **Verdict de légitimité** avec **couleur** : vert, jaune, ambre, orange, violet, rouge, gris
 - Détection des **programmes hôtes** (Java, Python, Node, PowerShell, `mshta`, `rundll32`...), y compris renommés ou embarqués
@@ -57,6 +58,7 @@ Pour montrer à des étudiants ce qu'est un processus, un PID, un port distant, 
 - Bouton **VirusTotal (adresse IP)** : ouvre la réputation de l'adresse distante
 - Bouton **ZIP pour VirusTotal** : crée sur le Bureau un ZIP de l'application pour l'envoyer à l'analyse quand VirusTotal ne la connaît pas
 - **Blocage réseau réversible** : bloquer ou autoriser la communication d'un programme, bloquer ou débloquer une adresse distante (règles du Pare-feu Windows, colonne « Pare-feu »)
+- Fenêtre **Règles actives** : toutes les règles créées par l'outil, même quand le processus n'existe plus, avec désactiver, réactiver et supprimer
 - **Verrou d'identité** : un programme sensible ne peut communiquer que depuis son chemin exact et sous les comptes observés (colonne « Compte »)
 - Bouton **Arrêter (forcé)** : termine un processus et ses enfants (`taskkill /F /T`, puis PowerShell en secours), avec confirmation
 - **Animation d'analyse** : indicateur qui tourne, barre de progression, étape en cours et secondes écoulées
@@ -200,6 +202,27 @@ Deux boutons, aussi dans le clic droit, créent des règles du Pare-feu Windows 
 - Les règles apparaissent dans le Pare-feu Windows avec Sécurité avancée (`wf.msc`) et s'y suppriment si besoin.
 
 Limites : si le Pare-feu Windows est désactivé ou remplacé par celui d'un antivirus tiers, les règles n'ont aucun effet (l'outil le signale quand il le détecte). Les connexions déjà ouvertes sont en général coupées, sinon relancez le programme.
+
+## Origine et chaîne de lancement
+
+Ces deux colonnes répondent à la question : **comment ce programme est-il arrivé et démarré ici ?**
+
+- **Origine** : quand un fichier est téléchargé depuis Internet, Windows lui attache une marque (flux `Zone.Identifier`) qui contient la zone et souvent l'adresse d'origine. L'outil la lit pour le programme réellement exécuté (le `.jar` ou le script pour un hôte). Exemple : `Internet : https://exemple.com/setup.exe`.
+- **Chaîne de lancement** : `wininit.exe > services.exe` indique un service installé (démarrage automatique) ; `explorer.exe` indique un double-clic de l'utilisateur ; un document Office ou PDF dans la chaîne indique un lancement déclenché par un fichier. La phrase de lecture s'affiche en bas quand vous sélectionnez une ligne.
+
+Limites :
+- **Un logiciel installé n'a en général pas de marque** : un installateur téléchargé porte la marque, mais les fichiers qu'il copie dans `Program Files` ou `AppData` n'en ont pas. L'outil lit la marque du fichier **qui s'exécute**, pas celle de l'installateur. La colonne est surtout utile pour un programme lancé directement depuis `Téléchargements`, le Bureau ou `Temp`.
+- **L'absence de marque ne rassure pas** : les téléchargements faits avec `curl`, certains outils de décompression, une clé USB, ou une marque supprimée par un attaquant n'en ont pas. Les fichiers du dossier Windows ne sont pas analysés.
+- **La chaîne ne couvre que les processus encore vivants** : si un ancêtre s'est déjà terminé, la chaîne est coupée et marquée « (parent terminé) ». Un identifiant de processus peut aussi être réutilisé ; l'outil compare les dates de création pour s'en protéger.
+- Ce sont des indices pour enquêter, pas des verdicts : ils ne modifient pas la couleur des lignes.
+
+## Règles actives
+
+Les règles du Pare-feu restent en place quand un processus s'arrête : une ligne bloquée disparaît du tableau, mais sa règle continue de s'appliquer. Le bouton **Règles actives** (aussi dans le clic droit) ouvre la liste de toutes les règles créées par l'outil : programmes bloqués, adresses bloquées et identités verrouillées. Chaque programme ou adresse occupe une ligne qui regroupe ses règles entrante et sortante.
+
+- **Désactiver / réactiver** : bascule la règle sans la supprimer.
+- **Supprimer** : retire la règle définitivement, après confirmation.
+- Cette fenêtre fonctionne sans aucun processus en cours : c'est la voie de secours si un blocage ou un verrou coupe quelque chose. Les règles restent aussi visibles dans `wf.msc`.
 
 ## Verrou d'identité
 

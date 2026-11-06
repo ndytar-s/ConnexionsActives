@@ -27,8 +27,21 @@ $cmd = ''
 $par = ''
 if ($w) {
     $cmd = [string]$w.CommandLine -replace '[\r\n]+', ' '
-    $pp = Get-Process -Id $w.ParentProcessId -ErrorAction SilentlyContinue
-    if ($pp) { $par = $pp.ProcessName + '.exe' }
+    $chain = @()
+    $cur = $w
+    for ($k = 0; $k -lt 12; $k++) {
+        if (-not $cur.ParentProcessId) { break }
+        $pw = Get-CimInstance Win32_Process -Filter ('ProcessId=' + $cur.ParentProcessId) -ErrorAction SilentlyContinue
+        if (-not $pw -or $pw.CreationDate -gt $cur.CreationDate) {
+            if (@('explorer.exe', 'services.exe', 'wininit.exe', 'winlogon.exe', 'smss.exe', 'system') -notcontains $cur.Name.ToLower()) {
+                $chain = @('(parent terminé)') + $chain
+            }
+            break
+        }
+        $chain = @($pw.Name) + $chain
+        $cur = $pw
+    }
+    $par = $chain -join ' > '
 }
 $st = ''
 $cn = ''
@@ -62,7 +75,12 @@ if ($w) {
     $o = Invoke-CimMethod -InputObject $w -MethodName GetOwner -ErrorAction SilentlyContinue
     if ($o -and $o.User) { $ow = $o.Domain + '\' + $o.User }
 }
-[string]::Join($sep, @($p, $st, $cn, $cmd, $par, $sz, $mt, $of, $eg, $ow))
+$zi = ''
+if ($p) {
+    $zs = Get-Content -LiteralPath $p -Stream Zone.Identifier -ErrorAction SilentlyContinue
+    if ($zs) { $zi = ($zs -join [string][char]30) }
+}
+[string]::Join($sep, @($p, $st, $cn, $cmd, $par, $sz, $mt, $of, $eg, $ow, $zi))
 )", psFile, "UTF-8")
 
 rowColors := Map()                   ; couleurs par identifiant de ligne (stable au tri)
@@ -94,6 +112,8 @@ ipBlocked := Map()                   ; adresses distantes bloquées (règle acti
 lockBlocked := Map()                 ; programmes dont l'identité est verrouillée (règle active)
 lockImages := Map()                  ; nom d'image -> chemins verrouillés (fichier verrous.tsv)
 lockFile := A_AppData "\ConnexionsActives\verrous.tsv"
+gr := ""                            ; fenêtre « Règles actives »
+lvr := ""                           ; liste de cette fenêtre
 
 ; Script PowerShell temporaire : règles du Pare-feu Windows créées par l'outil (bloquer / autoriser à nouveau)
 fwFile := A_Temp "\ahk_fw.ps1"
@@ -124,6 +144,17 @@ if ($op -eq 'list') {
     exit
 }
 try {
+    if ($op -like 'rule*') {
+        foreach ($nm in $arg.Split('|')) {
+            $r = $all | Where-Object { $_.DisplayName -eq $nm } | Select-Object -First 1
+            if (-not $r) { continue }
+            if ($op -eq 'ruledel') { Remove-NetFirewallRule -Name $r.Name }
+            elseif ($op -eq 'ruleon') { Set-NetFirewallRule -Name $r.Name -Enabled True }
+            else { Set-NetFirewallRule -Name $r.Name -Enabled False }
+        }
+        'OK'
+        exit
+    }
     $kind = 'PROG'
     if ($op -like 'ip*') { $kind = 'IP' }
     if ($op -like 'lock*') { $kind = 'LOCK' }
@@ -230,11 +261,12 @@ btnKill := g.Add("Button", "xm w150", "Arrêter (forcé)")
 btnBlocProg := g.Add("Button", "x+8 w220", "Programme : bloquer / autoriser")
 btnBlocIP := g.Add("Button", "x+8 w200", "Adresse : bloquer / débloquer")
 btnLock := g.Add("Button", "x+8 w250", "Identité : verrouiller / déverrouiller")
+btnRegles := g.Add("Button", "x+8 w140", "Règles actives")
 prog := g.Add("Progress", "xm w1150 h12 Range0-100")
 status := g.Add("Text", "xm w1150"
     , "Prêt. Vert : officiel ou approuvé | Jaune : tiers signé | Ambre : hôte (Java, Python, PowerShell...) | Orange : non signé ou nouvelle destination | Violet : accès à distance | Rouge : suspect | Gris : inconnu")
 lv := g.Add("ListView", "xm w1150 r24 Grid"
-    , ["Image", "PID", "Local", "Distant", "Hôte distant (DNS)", "Propriétaire (RDAP)", "Port distant", "Chemin", "Signature", "Éditeur", "Verdict", "Parent", "Confiance", "Pare-feu", "Compte"])
+    , ["Image", "PID", "Local", "Distant", "Hôte distant (DNS)", "Propriétaire (RDAP)", "Port distant", "Chemin", "Signature", "Éditeur", "Verdict", "Chaîne de lancement", "Confiance", "Pare-feu", "Compte", "Origine"])
 
 lv.Opt("+LV0x010000")                ; LVS_EX_DOUBLEBUFFER : évite les défauts d'affichage
 btn.OnEvent("Click", Analyser)
@@ -248,6 +280,7 @@ btnKill.OnEvent("Click", (*) => ArreterProcessus(lv, lv.GetNext(0)))
 btnBlocProg.OnEvent("Click", (*) => BloquerProgramme(lv, lv.GetNext(0)))
 btnBlocIP.OnEvent("Click", (*) => BloquerAdresse(lv, lv.GetNext(0)))
 btnLock.OnEvent("Click", (*) => VerrouillerIdentite(lv, lv.GetNext(0)))
+btnRegles.OnEvent("Click", OuvrirRegles)
 
 ctxMenu := Menu()
 ctxMenu.Add("Vérifier sur Google", (*) => RechercherGoogle(lv, lv.GetNext(0)))
@@ -263,6 +296,7 @@ ctxMenu.Add("Arrêter le processus (forcé)", (*) => ArreterProcessus(lv, lv.Get
 ctxMenu.Add("Programme : bloquer / autoriser la communication", (*) => BloquerProgramme(lv, lv.GetNext(0)))
 ctxMenu.Add("Adresse distante : bloquer / débloquer", (*) => BloquerAdresse(lv, lv.GetNext(0)))
 ctxMenu.Add("Identité : verrouiller / déverrouiller (chemin + comptes)", (*) => VerrouillerIdentite(lv, lv.GetNext(0)))
+ctxMenu.Add("Règles actives du Pare-feu...", OuvrirRegles)
 ctxMenu.Add()
 ctxMenu.Add("Ouvrir l'emplacement du fichier", (*) => OuvrirDossier(lv, lv.GetNext(0)))
 ctxMenu.Add("Copier la ligne de commande", (*) => (d := DonneesLigne(lv, lv.GetNext(0))) ? A_Clipboard := d.cmd : 0)
@@ -375,16 +409,16 @@ AnalyserCorps() {
             verdict := "SUSPECT (porte le nom d'un programme verrouillé mais s'exécute depuis un autre chemin)"
 
         d := {lieu: i.lieu, fp: i.fp, dest: DestKey(fqdn, ip), verdict: verdict, hote: i.hote, outil: i.outil
-            , nom: i.nom, gnom: i.gnom, cmd: i.cmd, owner: owners.Get(ip, ""), exe: i.exe, ip: ip}
+            , nom: i.nom, gnom: i.gnom, cmd: i.cmd, owner: owners.Get(ip, ""), exe: i.exe, ip: ip, parent: i.parent}
         t := StatutConfiance(d)
-        n := lv.Add(, i.img, cn.pid, cn.adr, cn.dist, fqdn, owners.Get(ip, ""), port, i.chemin, i.statut, i.editeur, verdict, i.parent, t, TexteBlocage(d), i.compte)
+        n := lv.Add(, i.img, cn.pid, cn.adr, cn.dist, fqdn, owners.Get(ip, ""), port, i.chemin, i.statut, i.editeur, verdict, i.parent, t, TexteBlocage(d), i.compte, i.origine)
         id := SendMessage(0x10B4, n - 1, 0, lv)     ; LVM_MAPINDEXTOID
         rowData[id] := d
         c := CouleurLigne(verdict, t)
         if IsObject(c)
             rowColors[id] := c
     }
-    Loop 15
+    Loop 16
         lv.ModifyCol(A_Index, "AutoHdr")
     WinRedraw(lv.Hwnd)
     return conns.Length " connexions ESTABLISHED analysées en " Round((A_TickCount - t0) / 1000) " s. Sélectionnez une ligne pour voir sa commande. Vert : officiel/approuvé | Jaune : tiers | Ambre : hôte | Orange : non signé/nouvelle destination | Violet : accès à distance | Rouge : suspect | Gris : inconnu"
@@ -404,7 +438,47 @@ AfficherCommande(ctrl, item, selected) {
         return
     d := DonneesLigne(ctrl, item)
     if IsObject(d)
-        status.Value := "Commande : " d.cmd
+        status.Value := "Commande : " d.cmd "   |   Lancement : " LectureChaine(d.parent)
+}
+
+; Traduit la chaîne de lancement en une phrase
+LectureChaine(chaine) {
+    if (chaine = "")
+        return "processus racine du système"
+    if InStr(chaine, "(parent terminé)")
+        return "parent déjà terminé, origine du lancement introuvable"
+    if RegExMatch(chaine, "i)(?:^|>\s*)(?:winword|excel|powerpnt|outlook|acrord32|acrobat)\.exe")
+        return "lancé depuis un document (Office, PDF)"
+    if RegExMatch(chaine, "i)services\.exe")
+        return "service Windows, démarrage automatique"
+    if RegExMatch(chaine, "i)^explorer\.exe$")
+        return "lancé par l'utilisateur (explorateur)"
+    return "lancé par " chaine
+}
+
+; Marque de téléchargement (flux Zone.Identifier) d'un fichier, lue par PowerShell
+LireOrigine(chemin) {
+    if (chemin = "" || InStr(chemin, A_WinDir "\") = 1)
+        return ""
+    q := "'"
+    ps := StrReplace(chemin, "'", "''")
+    out := RunCmd('powershell -NoProfile -Command "(Get-Content -LiteralPath ' q ps q ' -Stream Zone.Identifier -ErrorAction SilentlyContinue) -join [char]30"')
+    return DecrireOrigine(Trim(out, " `r`n"))
+}
+
+; Transforme le contenu du flux (lignes séparées par le caractère 30) en texte lisible
+DecrireOrigine(txt) {
+    if (txt = "")
+        return "Aucune marque de téléchargement"
+    zone := RegExMatch(txt, "ZoneId=(\d+)", &z) ? z[1] : ""
+    hote := RegExMatch(txt, "HostUrl=([^\x1e\r\n]+)", &h) ? h[1] : ""
+    ref := RegExMatch(txt, "ReferrerUrl=([^\x1e\r\n]+)", &rf) ? rf[1] : ""
+    zones := Map("0", "Ordinateur local", "1", "Intranet", "2", "Site de confiance", "3", "Internet", "4", "Site à risque")
+    res := zones.Has(zone) ? zones[zone] : "Zone " zone
+    url := (hote != "") ? hote : ref
+    if (url != "")
+        res .= " : " SubStr(url, 1, 150)
+    return res
 }
 
 Inspecter(pid) {
@@ -426,6 +500,7 @@ Inspecter(pid) {
     original := p.Length >= 8 ? p[8] : ""
     moteur := p.Length >= 9 ? p[9] : ""
     compte := p.Length >= 10 ? p[10] : ""
+    zi := p.Length >= 11 ? p[11] : ""
 
     ; Verdict de base
     if (pid = "4" || nom = "System")
@@ -487,8 +562,14 @@ Inspecter(pid) {
     }
     cheminAff := (cible != "") ? cible : chemin
     editeurAff := (cible != "" && editeur != "") ? editeur " (hôte " nom ")" : editeur
+    if (cible != "")
+        origine := LireOrigine(cible)
+    else if (chemin = "" || InStr(chemin, A_WinDir "\") = 1)
+        origine := ""
+    else
+        origine := DecrireOrigine(zi)
     return {nom: nom, img: img, gnom: gnom, chemin: cheminAff, statut: statut, editeur: editeurAff, verdict: verdict
-        , cmd: cmd, parent: parent, hote: hote, outil: outil, lieu: lieu, fp: fp, exe: chemin, compte: compte}
+        , cmd: cmd, parent: parent, hote: hote, outil: outil, lieu: lieu, fp: fp, exe: chemin, compte: compte, origine: origine}
 }
 
 Ajout(&r, txt) {
@@ -511,8 +592,8 @@ CommandeSuspecte(cmd, chemin, nomL, original, parent) {
         Ajout(&r, "URL dans la commande")
     if RegExMatch(c, "i)\\(?:AppData|Temp|Downloads|ProgramData)\\|\\Users\\Public\\")
         Ajout(&r, "chargé depuis un dossier utilisateur ou temporaire")
-    if RegExMatch(parent, "i)^(winword|excel|powerpnt|outlook|acrord32|acrobat)\.exe$")
-        Ajout(&r, "lancé par " parent)
+    if RegExMatch(parent, "i)(?:^|>\s*)(?:winword|excel|powerpnt|outlook|acrord32|acrobat)\.exe")
+        Ajout(&r, "lancé via " parent)
     return r
 }
 
@@ -1192,6 +1273,98 @@ VerrouillerIdentite(ctrl, row) {
     if (SubStr(out, 1, 2) = "OK")
         EcrireVerrou("ON", d, comptes)
     ResultatRegle(out, false, "Identité verrouillée : " d.nom " ne communique que depuis ce chemin et sous les comptes listés.")
+}
+
+; ---------------------------------------------------------------- Règles actives
+
+; Liste toutes les règles créées par l'outil, même quand le processus n'existe plus
+OuvrirRegles(*) {
+    global gr, lvr
+    if IsObject(gr) {
+        gr.Show()
+        RemplirRegles()
+        return
+    }
+    gr := Gui("+Resize", "Règles actives ConnexionsActives")
+    lvr := gr.Add("ListView", "w900 r16 Grid", ["Type", "Sens", "Cible (chemin ou adresse)", "État", "Règles"])
+    b1 := gr.Add("Button", "w170", "Désactiver / réactiver")
+    b2 := gr.Add("Button", "x+8 w120", "Supprimer")
+    b3 := gr.Add("Button", "x+8 w120", "Actualiser")
+    b1.OnEvent("Click", (*) => ActionRegle("bascule"))
+    b2.OnEvent("Click", (*) => ActionRegle("supprime"))
+    b3.OnEvent("Click", (*) => RemplirRegles())
+    gr.OnEvent("Close", FermerRegles)
+    gr.OnEvent("Escape", FermerRegles)
+    gr.Show()
+    RemplirRegles()
+}
+
+FermerRegles(*) {
+    global gr, lvr
+    gr.Destroy()
+    gr := ""
+    lvr := ""
+}
+
+; Une ligne par cible : les règles entrante et sortante d'un même programme ou d'une même adresse sont regroupées
+RemplirRegles() {
+    global lvr, fwFile
+    lvr.Delete()
+    out := RunCmd('powershell -NoProfile -ExecutionPolicy Bypass -File "' fwFile '" list')
+    libelles := Map("PROG", "Programme bloqué", "IP", "Adresse bloquée", "LOCK", "Identité verrouillée")
+    groupes := Map()
+    for l in StrSplit(out, "`n", "`r") {
+        p := StrSplit(l, "`t")
+        if (p.Length < 3)
+            continue
+        parts := StrSplit(p[2], "~")
+        if (parts.Length < 4 || parts[1] != "ConnexionsActives")
+            continue
+        cle := parts[2] "|" p[3]
+        if !groupes.Has(cle)
+            groupes[cle] := {type: libelles.Has(parts[2]) ? libelles[parts[2]] : parts[2], cible: p[3], sens: "", noms: "", actifs: 0, total: 0}
+        gp := groupes[cle]
+        sensTxt := (parts[3] = "Outbound") ? "Sortant" : "Entrant"
+        gp.sens .= ((gp.sens = "") ? "" : " + ") . sensTxt
+        gp.noms .= ((gp.noms = "") ? "" : "|") . p[2]
+        gp.total += 1
+        if (p[1] = "True")
+            gp.actifs += 1
+    }
+    for cle, gp in groupes {
+        etat := (gp.actifs = gp.total) ? "Actif" : ((gp.actifs = 0) ? "Désactivé" : "Partiel")
+        lvr.Add(, gp.type, gp.sens, gp.cible, etat, gp.noms)
+    }
+    Loop 4
+        lvr.ModifyCol(A_Index, "AutoHdr")
+    lvr.ModifyCol(5, 0)                         ; colonne technique cachée : noms des règles
+}
+
+; mode : bascule (désactiver ou réactiver) ou supprime
+ActionRegle(mode) {
+    global lvr, fwFile
+    row := lvr.GetNext(0)
+    if !row {
+        MsgBox("Sélectionnez d'abord une règle.", "Règles actives")
+        return
+    }
+    cible := lvr.GetText(row, 3)
+    etat := lvr.GetText(row, 4)
+    noms := lvr.GetText(row, 5)
+    if (mode = "supprime") {
+        rep := MsgBox("Supprimer définitivement cette règle ?`n`n" cible "`n`nLe programme ou l'adresse pourra de nouveau communiquer.", "Règles actives", "YesNo Icon! Default2")
+        if (rep != "Yes")
+            return
+        op := "ruledel"
+    } else
+        op := (etat = "Actif") ? "ruleoff" : "ruleon"
+    out := Trim(RunCmd('powershell -NoProfile -ExecutionPolicy Bypass -File "' fwFile '" ' op ' "' noms '"'), " `r`n")
+    if (SubStr(out, 1, 2) != "OK") {
+        MsgBox("Le Pare-feu Windows a refusé la modification :`n`n" SubStr(out, 1, 500), "Règles actives", "Icon!")
+        return
+    }
+    RemplirRegles()
+    RefreshPareFeu()                            ; met à jour la colonne Pare-feu du tableau principal
 }
 
 ; ---------------------------------------------------------------- Arrêt forcé
